@@ -4,6 +4,7 @@
   For bootstrapping this will initially implement the px4io protocol,
   but will later move to an ArduPilot specific protocol
  */
+#pragma once
 
 #include <AP_HAL/AP_HAL.h>
 
@@ -161,6 +162,7 @@ private:
     uint32_t last_rc_read_ms;
     uint32_t last_servo_read_ms;
     uint32_t last_safety_option_check_ms;
+    uint32_t last_reg_read_ms;
 
     // last value of safety options
     uint16_t last_safety_options = 0xFFFF;

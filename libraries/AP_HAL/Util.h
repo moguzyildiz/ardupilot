@@ -49,7 +49,9 @@ public:
     virtual bool run_debug_shell(AP_HAL::BetterStream *stream) = 0;
 
     enum safety_state : uint8_t {
-        SAFETY_NONE, SAFETY_DISARMED, SAFETY_ARMED
+        SAFETY_NONE,
+        SAFETY_DISARMED,
+        SAFETY_ARMED,
     };
 
     /*
@@ -181,6 +183,10 @@ public:
 
     // load persistent parameters from bootloader sector
     virtual bool load_persistent_params(ExpandingString &str) const { return false; }
+
+    virtual bool get_persistent_param_by_name(const char *name, char* value, size_t& len) const {
+        return false;
+    }
 
 #if HAL_UART_STATS_ENABLED
     // request information on uart I/O

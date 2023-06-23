@@ -5,6 +5,7 @@ cmd = 3: rolling circle, arg1 = yaw rate, arg2 = roll rate
 cmd = 4: knife edge at any angle, arg1 = roll angle to hold, arg2 = duration
 cmd = 5: pause, holding heading and alt to allow stabilization after a move, arg1 = duration in seconds
 ]]--
+-- luacheck: only 0
 
 DO_JUMP = 177
 k_throttle = 70
@@ -763,7 +764,7 @@ function check_auto_mission()
    end
 end
   
-local last_trick_action_state = 0
+local last_trick_action_state = rc:get_aux_cached(TRIK_ACT_FN:get())
 local trick_sel_chan = nil
 local last_trick_selection = 0
 
@@ -791,7 +792,7 @@ end
  name[1] = "Roll(s)"
  name[2] = "Loop(s)/Turnaround"
  name[3] = "Rolling Circle"
- name[4] = "Knife-Edge"
+ name[4] = "Straight Hold"
  name[5] = "Pause"
  name[6] = "Knife Edge Circle"
  name[7] = "4pt Roll"
@@ -817,7 +818,7 @@ function check_trick()
       return 0
    end
    if action == 1 and selection ~= last_trick_selection then
-         gcs:send_text(5, string.format("%s selected", name[id]))
+         gcs:send_text(5, string.format("Trick %u selected (%s)", id, name[id]))
          last_trick_action_state = action
          last_trick_selection = selection
          return 0
@@ -836,7 +837,7 @@ function check_trick()
       end
       local id = TRICKS[selection].id:get()    
       if action == 1 then
-         gcs:send_text(5, string.format("%s selected ", name[id]))
+         gcs:send_text(5, string.format("Trick %u selected (%s)", id, name[id]))
          return 0
       end
       -- action changed to execute
@@ -876,6 +877,10 @@ function do_trick(cmd,arg1,arg2)
 end
 
 function update()
+   if ahrs:get_velocity_NED() == nil  or ahrs:get_EAS2TAS() == nil or ahrs:get_relative_position_NED_origin() == nil then
+      -- don't start till we have valid ahrs estimates
+      return update, 10
+   end
    if vehicle:get_mode() == MODE_AUTO then
       check_auto_mission() --run a trick mission item
    elseif tricks_exist() then

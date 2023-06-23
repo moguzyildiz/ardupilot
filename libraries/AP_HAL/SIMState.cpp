@@ -37,6 +37,8 @@ using namespace AP_HAL;
 #define AP_SIM_FRAME_CLASS Helicopter
 #elif APM_BUILD_TYPE(APM_BUILD_ArduPlane)
 #define AP_SIM_FRAME_CLASS Plane
+#elif APM_BUILD_TYPE(APM_BUILD_Rover)
+#define AP_SIM_FRAME_CLASS SimRover
 #endif
 #endif
 
@@ -47,6 +49,8 @@ using namespace AP_HAL;
 #define AP_SIM_FRAME_STRING "heli"
 #elif APM_BUILD_TYPE(APM_BUILD_ArduPlane)
 #define AP_SIM_FRAME_STRING "plane"
+#elif APM_BUILD_TYPE(APM_BUILD_Rover)
+#define AP_SIM_FRAME_STRING "rover"
 #endif
 #endif
 
@@ -158,6 +162,9 @@ void SIMState::fdm_input_local(void)
     }
     if (leddarone != nullptr) {
         leddarone->update(sitl_model->rangefinder_range());
+    }
+    if (rds02uf != nullptr) {
+        rds02uf->update(sitl_model->rangefinder_range());
     }
     if (USD1_v0 != nullptr) {
         USD1_v0->update(sitl_model->rangefinder_range());
@@ -370,7 +377,7 @@ void SIMState::set_height_agl(void)
         // get height above terrain from AP_Terrain. This assumes
         // AP_Terrain is working
         float terrain_height_amsl;
-        struct Location location;
+        Location location;
         location.lat = _sitl->state.latitude*1.0e7;
         location.lng = _sitl->state.longitude*1.0e7;
 

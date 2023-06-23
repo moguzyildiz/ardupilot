@@ -1,8 +1,9 @@
 #include "Plane.h"
 
-Mode::Mode()
+Mode::Mode() :
+    ahrs(plane.ahrs)
 #if HAL_QUADPLANE_ENABLED
-    : quadplane(plane.quadplane),
+    , quadplane(plane.quadplane),
     pos_control(plane.quadplane.pos_control),
     attitude_control(plane.quadplane.attitude_control),
     loiter_nav(plane.quadplane.loiter_nav),
@@ -15,6 +16,11 @@ void Mode::exit()
 {
     // call sub-classes exit
     _exit();
+    // stop autotuning if not AUTOTUNE mode
+    if (plane.control_mode != &plane.mode_autotune){
+        plane.autotune_restore();
+    }
+
 }
 
 bool Mode::enter()
@@ -26,6 +32,9 @@ bool Mode::enter()
 
     // cancel inverted flight
     plane.auto_state.inverted_flight = false;
+    
+    // cancel waiting for rudder neutral
+    plane.takeoff_state.waiting_for_rudder_neutral = false;
 
     // don't cross-track when starting a mission
     plane.auto_state.next_wp_crosstrack = false;
@@ -59,7 +68,7 @@ bool Mode::enter()
 
     // zero initial pitch and highest airspeed on mode change
     plane.auto_state.highest_airspeed = 0;
-    plane.auto_state.initial_pitch_cd = plane.ahrs.pitch_sensor;
+    plane.auto_state.initial_pitch_cd = ahrs.pitch_sensor;
 
     // disable taildrag takeoff on mode change
     plane.auto_state.fbwa_tdrag_takeoff_mode = false;
@@ -163,4 +172,56 @@ void Mode::update_target_altitude()
     }
 
     plane.altitude_error_cm = plane.calc_altitude_error_cm();
+}
+
+// returns true if the vehicle can be armed in this mode
+bool Mode::pre_arm_checks(size_t buflen, char *buffer) const
+{
+    if (!_pre_arm_checks(buflen, buffer)) {
+        if (strlen(buffer) == 0) {
+            // If no message is provided add a generic one
+            hal.util->snprintf(buffer, buflen, "mode not armable");
+        }
+        return false;
+    }
+
+    return true;
+}
+
+// Auto and Guided do not call this to bypass the q-mode check.
+bool Mode::_pre_arm_checks(size_t buflen, char *buffer) const
+{
+#if HAL_QUADPLANE_ENABLED
+    if (plane.quadplane.enabled() && !is_vtol_mode() &&
+            plane.quadplane.option_is_set(QuadPlane::OPTION::ONLY_ARM_IN_QMODE_OR_AUTO)) {
+        hal.util->snprintf(buffer, buflen, "not Q mode");
+        return false;
+    }
+#endif
+    return true;
+}
+
+void Mode::run()
+{
+    // Direct stick mixing functionality has been removed, so as not to remove all stick mixing from the user completely
+    // the old direct option is now used to enable fbw mixing, this is easier than doing a param conversion.
+    if ((plane.g.stick_mixing == StickMixing::FBW) || (plane.g.stick_mixing == StickMixing::DIRECT_REMOVED)) {
+        plane.stabilize_stick_mixing_fbw();
+    }
+    plane.stabilize_roll();
+    plane.stabilize_pitch();
+    plane.stabilize_yaw();
+}
+
+// Reset rate and steering controllers
+void Mode::reset_controllers()
+{
+    // reset integrators
+    plane.rollController.reset_I();
+    plane.pitchController.reset_I();
+    plane.yawController.reset_I();
+
+    // reset steering controls
+    plane.steer_state.locked_course = false;
+    plane.steer_state.locked_course_err = 0;
 }

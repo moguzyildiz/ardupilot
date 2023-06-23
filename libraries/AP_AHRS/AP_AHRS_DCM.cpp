@@ -1022,7 +1022,7 @@ void AP_AHRS_DCM::estimate_wind(void)
 
 // return our current position estimate using
 // dead-reckoning or GPS
-bool AP_AHRS_DCM::get_location(struct Location &loc) const
+bool AP_AHRS_DCM::get_location(Location &loc) const
 {
     loc.lat = _last_lat;
     loc.lng = _last_lng;
@@ -1183,7 +1183,7 @@ bool AP_AHRS_DCM::get_velocity_NED(Vector3f &vec) const
 
 // Get a derivative of the vertical position in m/s which is kinematically consistent with the vertical position is required by some control loops.
 // This is different to the vertical velocity from the EKF which is not always consistent with the vertical position due to the various errors that are being corrected for.
-bool AP_AHRS_DCM::get_vert_pos_rate(float &velocity) const
+bool AP_AHRS_DCM::get_vert_pos_rate_D(float &velocity) const
 {
     Vector3f velned;
     if (!get_velocity_NED(velned)) {

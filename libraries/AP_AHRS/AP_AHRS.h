@@ -31,13 +31,13 @@
 
 #include "AP_AHRS_DCM.h"
 #include "AP_AHRS_SIM.h"
+#include "AP_AHRS_External.h"
 
 // forward declare view class
 class AP_AHRS_View;
 
 #define AP_AHRS_NAVEKF_SETTLE_TIME_MS 20000     // time in milliseconds the ekf needs to settle after being started
 
-#include <AP_NMEA_Output/AP_NMEA_Output.h>
 
 // fwd declare GSF estimator
 class EKFGSF_yaw;
@@ -89,7 +89,7 @@ public:
     void            reset();
 
     // dead-reckoning support
-    bool get_location(struct Location &loc) const;
+    bool get_location(Location &loc) const;
 
     // get latest altitude estimate above ground level in meters and validity flag
     bool get_hagl(float &hagl) const WARN_IF_UNUSED;
@@ -108,7 +108,7 @@ public:
     // wind_estimation_enabled returns true if wind estimation is enabled
     bool get_wind_estimation_enabled() const { return wind_estimation_enabled; }
 
-    // return a wind estimation vector, in m/s
+    // return a wind estimation vector, in m/s; returns 0,0,0 on failure
     Vector3f wind_estimate() const;
 
     // instruct DCM to update its wind estimate:
@@ -174,7 +174,7 @@ public:
     bool get_secondary_quaternion(Quaternion &quat) const;
 
     // return secondary position solution if available
-    bool get_secondary_position(struct Location &loc) const;
+    bool get_secondary_position(Location &loc) const;
 
     // EKF has a better ground speed vector estimate
     Vector2f groundspeed_vector();
@@ -193,6 +193,17 @@ public:
     // be called when the EKF has no absolute position reference (i.e. GPS)
     // from which to decide the origin on its own
     bool set_origin(const Location &loc) WARN_IF_UNUSED;
+
+#if AP_AHRS_POSITION_RESET_ENABLED
+    // Set the EKF's NE horizontal position states and their corresponding variances from the supplied WGS-84 location
+    // and 1-sigma horizontal position uncertainty. This can be used when the EKF is dead reckoning to periodically
+    // correct the position. If the EKF is is still using data from a postion sensor such as GPS, the position set
+    // will not be performed.
+    // pos_accuracy is the standard deviation of the horizontal position uncertainty in metres.
+    // The altitude element of the location is not used.
+    // Returns true if the set was successful.
+    bool handle_external_position_estimate(const Location &loc, float pos_accuracy, uint32_t timestamp_);
+#endif
 
     // returns the inertial navigation origin in lat/lon/alt
     bool get_origin(Location &ret) const WARN_IF_UNUSED;
@@ -218,7 +229,7 @@ public:
 
     // Get a derivative of the vertical position in m/s which is kinematically consistent with the vertical position is required by some control loops.
     // This is different to the vertical velocity from the EKF which is not always consistent with the vertical position due to the various errors that are being corrected for.
-    bool get_vert_pos_rate(float &velocity) const;
+    bool get_vert_pos_rate_D(float &velocity) const;
 
     // write optical flow measurements to EKF
     void writeOptFlowMeas(const uint8_t rawFlowQuality, const Vector2f &rawFlowRates, const Vector2f &rawGyroRates, const uint32_t msecFlowMeas, const Vector3f &posOffset, const float heightOverride);
@@ -433,7 +444,7 @@ public:
 
     // get the home location. This is const to prevent any changes to
     // home without telling AHRS about the change
-    const struct Location &get_home(void) const {
+    const Location &get_home(void) const {
         return _home;
     }
 
@@ -633,18 +644,18 @@ private:
     AP_Int8 _gps_minsats;
 
     enum class EKFType {
-        NONE = 0
+        NONE = 0,
 #if HAL_NAVEKF3_AVAILABLE
-        ,THREE = 3
+        THREE = 3,
 #endif
 #if HAL_NAVEKF2_AVAILABLE
-        ,TWO = 2
+        TWO = 2,
 #endif
 #if AP_AHRS_SIM_ENABLED
-        ,SIM = 10
+        SIM = 10,
 #endif
 #if HAL_EXTERNAL_AHRS_ENABLED
-        ,EXTERNAL = 11
+        EXTERNAL = 11,
 #endif
     };
     EKFType active_EKF_type(void) const;
@@ -718,7 +729,7 @@ private:
      */
     void load_watchdog_home();
     bool _checked_watchdog_home;
-    struct Location _home;
+    Location _home;
     bool _home_is_set :1;
     bool _home_locked :1;
 
@@ -784,6 +795,9 @@ private:
      */
     bool wind_estimation_enabled;
 
+    // return a wind estimation vector, in m/s
+    bool wind_estimate(Vector3f &wind) const WARN_IF_UNUSED;
+
     /*
      * fly_forward is set by the vehicles to indicate the vehicle
      * should generally be moving in the direction of its heading.
@@ -809,6 +823,11 @@ private:
     struct AP_AHRS_Backend::Estimates sim_estimates;
 #endif
 
+#if HAL_EXTERNAL_AHRS_ENABLED
+    AP_AHRS_External external;
+    struct AP_AHRS_Backend::Estimates external_estimates;
+#endif
+
     /*
      * copy results from a backend over AP_AHRS canonical results.
      * This updates member variables like roll and pitch, as well as
@@ -820,10 +839,6 @@ private:
     void Write_AHRS2(void) const;
     // write POS (canonical vehicle position) message out:
     void Write_POS(void) const;
-
-#if HAL_NMEA_OUTPUT_ENABLED
-    class AP_NMEA_Output* _nmea_out;
-#endif
 };
 
 namespace AP {

@@ -42,17 +42,15 @@ void Plane::init_ardupilot()
 #endif
     rc().init();
 
+#if AP_RELAY_ENABLED
     relay.init();
+#endif
 
     // initialise notify system
     notify.init();
     notify_mode(*control_mode);
 
     init_rc_out_main();
-    
-    // keep a record of how many resets have happened. This can be
-    // used to detect in-flight resets
-    g.num_resets.set_and_save(g.num_resets+1);
 
     // init baro
     barometer.init();
@@ -101,6 +99,11 @@ void Plane::init_ardupilot()
     camera_mount.init();
 #endif
 
+#if AP_CAMERA_ENABLED
+    // initialise camera
+    camera.init();
+#endif
+
 #if AP_LANDINGGEAR_ENABLED
     // initialise landing gear position
     g2.landing_gear.init();
@@ -137,7 +140,7 @@ void Plane::init_ardupilot()
 
     // set the correct flight mode
     // ---------------------------
-    reset_control_switch();
+    rc().reset_mode_switch();
 
     // initialise sensor
 #if AP_OPTICALFLOW_ENABLED
@@ -297,11 +300,6 @@ bool Plane::set_mode(Mode &new_mode, const ModeReason reason)
             AP_Notify::events.user_mode_change_failed = 1;
         }
         return false;
-    }
-
-    if (previous_mode == &mode_autotune) {
-        // restore last gains
-        autotune_restore();
     }
 
     // exit previous mode

@@ -13,6 +13,10 @@
    along with this program.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include "AP_Scripting_config.h"
+
+#if AP_SCRIPTING_ENABLED
+
 #include <AP_Scripting/AP_Scripting.h>
 #include <AP_HAL/AP_HAL.h>
 #include <GCS_MAVLink/GCS.h>
@@ -33,7 +37,9 @@
 #endif // !defined(SCRIPTING_STACK_MAX_SIZE)
 
 #if !defined(SCRIPTING_HEAP_SIZE)
-  #if CONFIG_HAL_BOARD == HAL_BOARD_SITL || CONFIG_HAL_BOARD == HAL_BOARD_LINUX || HAL_MEM_CLASS >= HAL_MEM_CLASS_500
+  #if CONFIG_HAL_BOARD == HAL_BOARD_SITL || CONFIG_HAL_BOARD == HAL_BOARD_LINUX || HAL_MEM_CLASS >= HAL_MEM_CLASS_1000
+    #define SCRIPTING_HEAP_SIZE (200 * 1024)
+  #elif HAL_MEM_CLASS >= HAL_MEM_CLASS_500
     #define SCRIPTING_HEAP_SIZE (100 * 1024)
   #else
     #define SCRIPTING_HEAP_SIZE (43 * 1024)
@@ -244,6 +250,15 @@ void AP_Scripting::thread(void) {
         }
         num_i2c_devices = 0;
 
+        // clear allocated PWM sources
+        for (uint8_t i=0; i<SCRIPTING_MAX_NUM_PWM_SOURCE; i++) {
+            if (_pwm_source[i] != nullptr) {
+                delete _pwm_source[i];
+                _pwm_source[i] = nullptr;
+            }
+        }
+        num_pwm_source = 0;
+
         bool cleared = false;
         while(true) {
             // 1hz check if we should restart
@@ -327,6 +342,25 @@ void AP_Scripting::restart_all()
     _stop = true;
 }
 
+void AP_Scripting::handle_message(const mavlink_message_t &msg, const mavlink_channel_t chan) {
+    if (mavlink_data.rx_buffer == nullptr) {
+        return;
+    }
+
+    struct mavlink_msg data {msg, chan, AP_HAL::millis()};
+
+    WITH_SEMAPHORE(mavlink_data.sem);
+    for (uint16_t i = 0; i < mavlink_data.accept_msg_ids_size; i++) {
+        if (mavlink_data.accept_msg_ids[i] == UINT32_MAX) {
+            return;
+        }
+        if (mavlink_data.accept_msg_ids[i] == msg.msgid) {
+            mavlink_data.rx_buffer->push(data);
+            return;
+        }
+    }
+}
+
 AP_Scripting *AP_Scripting::_singleton = nullptr;
 
 namespace AP {
@@ -334,3 +368,5 @@ namespace AP {
         return AP_Scripting::get_singleton();
     }
 }
+
+#endif  // AP_SCRIPTING_ENABLED

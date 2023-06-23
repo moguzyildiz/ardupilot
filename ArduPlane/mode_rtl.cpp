@@ -27,12 +27,8 @@ bool ModeRTL::_enter()
         // if VTOL landing is expected and quadplane motors are active and within QRTL radius and under QRTL altitude then switch to QRTL
         const bool vtol_landing = (plane.quadplane.rtl_mode == QuadPlane::RTL_MODE::SWITCH_QRTL) || (plane.quadplane.rtl_mode == QuadPlane::RTL_MODE::VTOL_APPROACH_QRTL);
         if (vtol_landing && (quadplane.motors->get_desired_spool_state() == AP_Motors::DesiredSpoolState::THROTTLE_UNLIMITED)) {
-            uint16_t qrtl_radius = abs(plane.g.rtl_radius);
-            if (qrtl_radius == 0) {
-                qrtl_radius = abs(plane.aparm.loiter_radius);
-            }
             int32_t alt_cm;
-            if ((plane.current_loc.get_distance(plane.next_WP_loc) < qrtl_radius) &&
+            if ((plane.current_loc.get_distance(plane.next_WP_loc) < plane.mode_qrtl.get_VTOL_return_radius()) &&
                 plane.current_loc.get_alt_cm(Location::AltFrame::ABOVE_HOME, alt_cm) && (alt_cm < plane.quadplane.qrtl_alt*100)) {
                 plane.set_mode(plane.mode_qrtl, ModeReason::QRTL_INSTEAD_OF_RTL);
                 return true;
@@ -51,7 +47,7 @@ void ModeRTL::update()
     plane.calc_throttle();
 
     bool alt_threshold_reached = false;
-    if (plane.g2.flight_options & FlightOptions::CLIMB_BEFORE_TURN) {
+    if (plane.flight_option_enabled(FlightOptions::CLIMB_BEFORE_TURN)) {
         // Climb to ALT_HOLD_RTL before turning. This overrides RTL_CLIMB_MIN.
         alt_threshold_reached = plane.current_loc.alt > plane.next_WP_loc.alt;
     } else if (plane.g2.rtl_climb_min > 0) {

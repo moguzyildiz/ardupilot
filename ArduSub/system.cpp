@@ -70,7 +70,9 @@ void Sub::init_ardupilot()
     init_rc_out();              // sets up motors and output to escs
     init_joystick();            // joystick initialization
 
+#if AP_RELAY_ENABLED
     relay.init();
+#endif
 
     /*
      *  setup the 'main loop is dead' check. Note that this relies on
@@ -97,10 +99,15 @@ void Sub::init_ardupilot()
 #if HAL_MOUNT_ENABLED
     // initialise camera mount
     camera_mount.init();
-    // This step ncessary so the servo is properly initialized
+    // This step is necessary so that the servo is properly initialized
     camera_mount.set_angle_target(0, 0, 0, false);
     // for some reason the call to set_angle_targets changes the mode to mavlink targeting!
     camera_mount.set_mode(MAV_MOUNT_MODE_RC_TARGETING);
+#endif
+
+#if AP_CAMERA_ENABLED
+    // initialise camera
+    camera.init();
 #endif
 
 #ifdef USERHOOK_INIT
@@ -275,8 +282,11 @@ bool Sub::should_log(uint32_t mask)
 #include <AP_ADSB/AP_ADSB.h>
 
 // dummy method to avoid linking AFS
+#if AP_ADVANCEDFAILSAFE_ENABLED
 bool AP_AdvancedFailsafe::gcs_terminate(bool should_terminate, const char *reason) { return false; }
 AP_AdvancedFailsafe *AP::advancedfailsafe() { return nullptr; }
+#endif
+
 #if HAL_ADSB_ENABLED
 // dummy method to avoid linking AP_Avoidance
 AP_Avoidance *AP::ap_avoidance() { return nullptr; }

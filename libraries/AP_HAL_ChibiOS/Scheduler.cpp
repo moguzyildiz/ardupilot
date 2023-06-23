@@ -14,6 +14,15 @@
  *
  * Code by Andrew Tridgell and Siddharth Bharat Purohit
  */
+
+#include <AP_HAL/AP_HAL_Boards.h>
+
+#ifndef HAL_SCHEDULER_ENABLED
+#define HAL_SCHEDULER_ENABLED 1
+#endif
+
+#if HAL_SCHEDULER_ENABLED
+
 #include <AP_HAL/AP_HAL.h>
 
 #include <hal.h>
@@ -144,6 +153,7 @@ void Scheduler::delay_microseconds(uint16_t usec)
         // calling with ticks == 0 causes a hard fault on ChibiOS
         ticks = 1;
     }
+    ticks = MIN(TIME_MAX_INTERVAL, ticks);
     chThdSleep(MAX(ticks,CH_CFG_ST_TIMEDELTA)); //Suspends Thread for desired microseconds
 }
 
@@ -276,7 +286,7 @@ void Scheduler::reboot(bool hold_in_bootloader)
     AP::FS().unmount();
 #endif
 
-#if !defined(NO_FASTBOOT)
+#if AP_FASTBOOT_ENABLED
     // setup RTC for fast reboot
     set_fast_reboot(hold_in_bootloader?RTC_BOOT_HOLD:RTC_BOOT_FAST);
 #endif
@@ -432,6 +442,17 @@ void Scheduler::_monitor_thread(void *arg)
             // at 500ms we declare an internal error
             INTERNAL_ERROR(AP_InternalError::error_t::main_loop_stuck);
         }
+
+#if AP_CRASHDUMP_ENABLED
+        if (loop_delay >= 1800 && using_watchdog) {
+            // we are about to watchdog, better to trigger a hardfault
+            // now and get a crash dump file
+            void *ptr = (void*)0xE000FFFF;
+            typedef void (*fptr)();
+            fptr gptr = (fptr) (void *)ptr;
+            gptr();
+        }
+#endif
 
 #if HAL_LOGGING_ENABLED
     if (log_wd_counter++ == 10 && hal.util->was_watchdog_reset()) {
@@ -653,6 +674,7 @@ uint8_t Scheduler::calculate_thread_priority(priority_base base, int8_t priority
         { PRIORITY_CAN, APM_CAN_PRIORITY},
         { PRIORITY_TIMER, APM_TIMER_PRIORITY},
         { PRIORITY_RCOUT, APM_RCOUT_PRIORITY},
+        { PRIORITY_LED, APM_LED_PRIORITY},
         { PRIORITY_RCIN, APM_RCIN_PRIORITY},
         { PRIORITY_IO, APM_IO_PRIORITY},
         { PRIORITY_UART, APM_UART_PRIORITY},
@@ -754,7 +776,22 @@ void Scheduler::watchdog_pat(void)
 {
     stm32_watchdog_pat();
     last_watchdog_pat_ms = AP_HAL::millis();
+#if defined(HAL_GPIO_PIN_EXT_WDOG)
+    ext_watchdog_pat(last_watchdog_pat_ms);
+#endif
 }
+
+#if defined(HAL_GPIO_PIN_EXT_WDOG)
+// toggle the external watchdog gpio pin
+void Scheduler::ext_watchdog_pat(uint32_t now_ms)
+{
+    // toggle watchdog GPIO every WDI_OUT_INTERVAL_TIME_MS
+    if ((now_ms - last_ext_watchdog_ms) >= EXT_WDOG_INTERVAL_MS) {
+        palToggleLine(HAL_GPIO_PIN_EXT_WDOG);
+        last_ext_watchdog_ms = now_ms;
+    }
+}
+#endif
 
 #if CH_DBG_ENABLE_STACK_CHECK == TRUE
 /*
@@ -788,5 +825,6 @@ void Scheduler::check_stack_free(void)
 }
 #endif // CH_DBG_ENABLE_STACK_CHECK == TRUE
 
-
 #endif // CH_CFG_USE_DYNAMIC
+
+#endif  // HAL_SCHEDULER_ENABLED

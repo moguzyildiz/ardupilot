@@ -1,3 +1,7 @@
+#include "AP_Scripting_config.h"
+
+#if AP_SCRIPTING_ENABLED
+
 #include <AP_Common/AP_Common.h>
 #include <AP_HAL/HAL.h>
 #include <AP_Logger/AP_Logger.h>
@@ -10,6 +14,8 @@
 
 #include <AP_Scripting/AP_Scripting.h>
 #include <string.h>
+
+extern const AP_HAL::HAL& hal;
 
 extern "C" {
 #include "lua/src/lmem.h"
@@ -33,6 +39,126 @@ int lua_micros(lua_State *L) {
 
     new_uint32_t(L);
     *check_uint32_t(L, -1) = AP_HAL::micros();
+
+    return 1;
+}
+
+int lua_mavlink_init(lua_State *L) {
+    binding_argcheck(L, 2);
+    WITH_SEMAPHORE(AP::scripting()->mavlink_data.sem);
+    // get the depth of receive queue
+    const uint32_t queue_size = get_uint32(L, -1, 0, 25);
+    // get number of msgs to accept
+    const uint32_t num_msgs = get_uint32(L, -2, 0, 25);
+
+    struct AP_Scripting::mavlink &data = AP::scripting()->mavlink_data;
+    if (data.rx_buffer == nullptr) {
+        data.rx_buffer = new ObjectBuffer<struct AP_Scripting::mavlink_msg>(queue_size);
+        if (data.rx_buffer == nullptr) {
+            return luaL_error(L, "Failed to allocate mavlink rx buffer");
+        }
+    }
+    if (data.accept_msg_ids == nullptr) {
+        data.accept_msg_ids = new uint32_t[num_msgs];
+        if (data.accept_msg_ids == nullptr) {
+            return luaL_error(L, "Failed to allocate mavlink rx registry");
+        }
+        data.accept_msg_ids_size = num_msgs;
+        memset(data.accept_msg_ids, UINT32_MAX, sizeof(int) * num_msgs);
+    }
+    return 0;
+}
+
+int lua_mavlink_receive_chan(lua_State *L) {
+    binding_argcheck(L, 0);
+
+    struct AP_Scripting::mavlink_msg msg;
+    ObjectBuffer<struct AP_Scripting::mavlink_msg> *rx_buffer = AP::scripting()->mavlink_data.rx_buffer;
+
+    if (rx_buffer == nullptr) {
+        return luaL_error(L, "Never subscribed to a message");
+    }
+
+    if (rx_buffer->pop(msg)) {
+        luaL_Buffer b;
+        luaL_buffinit(L, &b);
+        luaL_addlstring(&b, (char *)&msg.msg, sizeof(msg.msg));
+        luaL_pushresult(&b);
+        lua_pushinteger(L, msg.chan);
+        lua_pushinteger(L, msg.timestamp_ms);
+        return 3;
+    } else {
+        // no MAVLink to handle, just return no results
+        return 0;
+    }
+}
+
+int lua_mavlink_register_rx_msgid(lua_State *L) {
+    binding_argcheck(L, 1);
+    
+    const uint32_t msgid = get_uint32(L, -1, 0, (1 << 24) - 1);
+
+    struct AP_Scripting::mavlink &data = AP::scripting()->mavlink_data;
+
+    // check that we aren't currently watching this ID
+    for (uint8_t i = 0; i < data.accept_msg_ids_size; i++) {
+        if (data.accept_msg_ids[i] == msgid) {
+            lua_pushboolean(L, false);
+            return 1;
+        }
+    }
+
+    int i = 0;
+    for (i = 0; i < data.accept_msg_ids_size; i++) {
+        if (data.accept_msg_ids[i] == UINT32_MAX) {
+            break;
+        }
+    }
+
+    if (i >= data.accept_msg_ids_size) {
+        return luaL_error(L, "Out of MAVLink ID's to monitor");
+    }
+
+    {
+        WITH_SEMAPHORE(data.sem);
+        data.accept_msg_ids[i] = msgid;
+    }
+
+    lua_pushboolean(L, true);
+    return 1;
+}
+
+int lua_mavlink_send_chan(lua_State *L) {
+    binding_argcheck(L, 3);
+    
+    const mavlink_channel_t chan = (mavlink_channel_t)get_uint32(L, 1, 0, MAVLINK_COMM_NUM_BUFFERS - 1);
+
+    const uint32_t msgid = get_uint32(L, 2, 0, (1 << 24) - 1);
+
+    const char *packet = luaL_checkstring(L, 3);
+
+    // FIXME: The data that's in this mavlink_msg_entry_t should be provided from the script, which allows
+    //        sending entirely new messages as outputs. At the moment we can only encode messages that
+    //        are known at compile time. This is fine as a starting point as this is symmetrical to the
+    //        decoding side of the scripting support
+    const mavlink_msg_entry_t *entry = mavlink_get_msg_entry(msgid);
+    if (entry == nullptr) {
+        return luaL_error(L, "Unknown MAVLink message ID (%d)", msgid);
+    }
+
+    WITH_SEMAPHORE(comm_chan_lock(chan));
+    if (comm_get_txspace(chan) >= (GCS_MAVLINK::packet_overhead_chan(chan) + entry->max_msg_len)) {
+        _mav_finalize_message_chan_send(chan,
+                                        entry->msgid,
+                                        packet,
+                                        entry->min_msg_len,
+                                        entry->max_msg_len,
+                                        entry->crc_extra);
+
+        lua_pushboolean(L, true);
+    } else {
+        lua_pushboolean(L, false);
+    }
 
     return 1;
 }
@@ -382,26 +508,28 @@ int lua_get_i2c_device(lua_State *L) {
         }
     }
 
+    auto *scripting = AP::scripting();
+
     static_assert(SCRIPTING_MAX_NUM_I2C_DEVICE >= 0, "There cannot be a negative number of I2C devices");
-    if (AP::scripting()->num_i2c_devices >= SCRIPTING_MAX_NUM_I2C_DEVICE) {
+    if (scripting->num_i2c_devices >= SCRIPTING_MAX_NUM_I2C_DEVICE) {
         return luaL_argerror(L, 1, "no i2c devices available");
     }
 
-    AP::scripting()->_i2c_dev[AP::scripting()->num_i2c_devices] = new AP_HAL::OwnPtr<AP_HAL::I2CDevice>;
-    if (AP::scripting()->_i2c_dev[AP::scripting()->num_i2c_devices] == nullptr) {
+    scripting->_i2c_dev[scripting->num_i2c_devices] = new AP_HAL::OwnPtr<AP_HAL::I2CDevice>;
+    if (scripting->_i2c_dev[scripting->num_i2c_devices] == nullptr) {
         return luaL_argerror(L, 1, "i2c device nullptr");
     }
 
-    *AP::scripting()->_i2c_dev[AP::scripting()->num_i2c_devices] = std::move(hal.i2c_mgr->get_device(bus, address, bus_clock, use_smbus));
+    *scripting->_i2c_dev[scripting->num_i2c_devices] = std::move(hal.i2c_mgr->get_device(bus, address, bus_clock, use_smbus));
 
-    if (AP::scripting()->_i2c_dev[AP::scripting()->num_i2c_devices] == nullptr || AP::scripting()->_i2c_dev[AP::scripting()->num_i2c_devices]->get() == nullptr) {
+    if (scripting->_i2c_dev[scripting->num_i2c_devices] == nullptr || scripting->_i2c_dev[scripting->num_i2c_devices]->get() == nullptr) {
         return luaL_argerror(L, 1, "i2c device nullptr");
     }
 
     new_AP_HAL__I2CDevice(L);
-    *((AP_HAL::I2CDevice**)luaL_checkudata(L, -1, "AP_HAL::I2CDevice")) = AP::scripting()->_i2c_dev[AP::scripting()->num_i2c_devices]->get();
+    *((AP_HAL::I2CDevice**)luaL_checkudata(L, -1, "AP_HAL::I2CDevice")) = scripting->_i2c_dev[scripting->num_i2c_devices]->get();
 
-    AP::scripting()->num_i2c_devices++;
+    scripting->num_i2c_devices++;
 
     return 1;
 }
@@ -459,15 +587,17 @@ int lua_get_CAN_device(lua_State *L) {
     const uint32_t raw_buffer_len = get_uint32(L, 1 + arg_offset, 1, 25);
     const uint32_t buffer_len = static_cast<uint32_t>(raw_buffer_len);
 
-    if (AP::scripting()->_CAN_dev == nullptr) {
-        AP::scripting()->_CAN_dev = new ScriptingCANSensor(AP_CANManager::Driver_Type::Driver_Type_Scripting);
-        if (AP::scripting()->_CAN_dev == nullptr) {
+    auto *scripting = AP::scripting();
+
+    if (scripting->_CAN_dev == nullptr) {
+        scripting->_CAN_dev = new ScriptingCANSensor(AP_CAN::Protocol::Scripting);
+        if (scripting->_CAN_dev == nullptr) {
             return luaL_argerror(L, 1, "CAN device nullptr");
         }
     }
 
     new_ScriptingCANBuffer(L);
-    *((ScriptingCANBuffer**)luaL_checkudata(L, -1, "ScriptingCANBuffer")) = AP::scripting()->_CAN_dev->add_buffer(buffer_len);
+    *((ScriptingCANBuffer**)luaL_checkudata(L, -1, "ScriptingCANBuffer")) = scripting->_CAN_dev->add_buffer(buffer_len);
 
     return 1;
 }
@@ -482,15 +612,17 @@ int lua_get_CAN_device2(lua_State *L) {
     const uint32_t raw_buffer_len = get_uint32(L, 1 + arg_offset, 1, 25);
     const uint32_t buffer_len = static_cast<uint32_t>(raw_buffer_len);
 
-    if (AP::scripting()->_CAN_dev2 == nullptr) {
-        AP::scripting()->_CAN_dev2 = new ScriptingCANSensor(AP_CANManager::Driver_Type::Driver_Type_Scripting2);
-        if (AP::scripting()->_CAN_dev2 == nullptr) {
+    auto *scripting = AP::scripting();
+
+    if (scripting->_CAN_dev2 == nullptr) {
+        scripting->_CAN_dev2 = new ScriptingCANSensor(AP_CAN::Protocol::Scripting2);
+        if (scripting->_CAN_dev2 == nullptr) {
             return luaL_argerror(L, 1, "CAN device nullptr");
         }
     }
 
     new_ScriptingCANBuffer(L);
-    *((ScriptingCANBuffer**)luaL_checkudata(L, -1, "ScriptingCANBuffer")) = AP::scripting()->_CAN_dev2->add_buffer(buffer_len);
+    *((ScriptingCANBuffer**)luaL_checkudata(L, -1, "ScriptingCANBuffer")) = scripting->_CAN_dev2->add_buffer(buffer_len);
 
     return 1;
 }
@@ -500,6 +632,8 @@ int lua_get_CAN_device2(lua_State *L) {
   directory listing, return table of files in a directory
  */
 int lua_dirlist(lua_State *L) {
+    binding_argcheck(L, 1);
+
     struct dirent *entry;
     int i;
     const char *path = luaL_checkstring(L, 1);
@@ -529,6 +663,46 @@ int lua_dirlist(lua_State *L) {
   remove a file
  */
 int lua_removefile(lua_State *L) {
-  const char *filename = luaL_checkstring(L, 1);
-  return luaL_fileresult(L, remove(filename) == 0, filename);
+    binding_argcheck(L, 1);
+    const char *filename = luaL_checkstring(L, 1);
+    return luaL_fileresult(L, remove(filename) == 0, filename);
 }
+
+// Manual binding to allow SRV_Channels table to see safety state
+int SRV_Channels_get_safety_state(lua_State *L) {
+    binding_argcheck(L, 1);
+    const bool data = hal.util->safety_switch_state() !=  AP_HAL::Util::SAFETY_ARMED;
+    lua_pushboolean(L, data);
+    return 1;
+}
+
+int lua_get_PWMSource(lua_State *L) {
+    binding_argcheck(L, 0);
+
+    auto *scripting = AP::scripting();
+
+    static_assert(SCRIPTING_MAX_NUM_PWM_SOURCE >= 0, "There cannot be a negative number of PWMSources");
+    if (scripting->num_pwm_source >= SCRIPTING_MAX_NUM_PWM_SOURCE) {
+        return luaL_argerror(L, 1, "no PWMSources available");
+    }
+
+    scripting->_pwm_source[scripting->num_pwm_source] = new AP_HAL::PWMSource;
+    if (scripting->_pwm_source[scripting->num_pwm_source] == nullptr) {
+        return luaL_argerror(L, 1, "PWMSources device nullptr");
+    }
+
+    new_AP_HAL__PWMSource(L);
+    *((AP_HAL::PWMSource**)luaL_checkudata(L, -1, "AP_HAL::PWMSource")) = scripting->_pwm_source[scripting->num_pwm_source];
+
+    scripting->num_pwm_source++;
+
+    return 1;
+}
+
+int lua_get_current_ref()
+{
+    auto *scripting = AP::scripting();
+    return scripting->get_current_ref();
+}
+
+#endif  // AP_SCRIPTING_ENABLED

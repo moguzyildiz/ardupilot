@@ -16,11 +16,14 @@
   suppport for serial connected AHRS systems
  */
 
-#include "AP_ExternalAHRS.h"
-#include "AP_ExternalAHRS_VectorNav.h"
-#include "AP_ExternalAHRS_LORD.h"
+#include "AP_ExternalAHRS_config.h"
 
 #if HAL_EXTERNAL_AHRS_ENABLED
+
+#include "AP_ExternalAHRS.h"
+#include "AP_ExternalAHRS_backend.h"
+#include "AP_ExternalAHRS_VectorNav.h"
+#include "AP_ExternalAHRS_LORD.h"
 
 #include <GCS_MAVLink/GCS.h>
 
@@ -68,6 +71,13 @@ const AP_Param::GroupInfo AP_ExternalAHRS::var_info[] = {
     // @User: Standard
     AP_GROUPINFO("_OPTIONS", 3, AP_ExternalAHRS, options, 0),
 
+    // @Param: _SENSORS
+    // @DisplayName: External AHRS sensors
+    // @Description: External AHRS sensors bitmask
+    // @Bitmask: 0:GPS,1:IMU,2:Baro,3:Compass
+    // @User: Advanced
+    AP_GROUPINFO("_SENSORS", 4, AP_ExternalAHRS, sensors, 0xF),
+    
     AP_GROUPEND
 };
 
@@ -83,13 +93,17 @@ void AP_ExternalAHRS::init(void)
     case DevType::None:
         // nothing to do
         break;
+#if AP_EXTERNAL_AHRS_VECTORNAV_ENABLED
     case DevType::VecNav:
         backend = new AP_ExternalAHRS_VectorNav(this, state);
         break;
+#endif
+#if AP_EXTERNAL_AHRS_LORD_ENABLED
     case DevType::LORD:
         backend = new AP_ExternalAHRS_LORD(this, state);
         break;
     default:
+#endif
         GCS_SEND_TEXT(MAV_SEVERITY_INFO, "Unsupported ExternalAHRS type %u", unsigned(devtype));
         break;
     }
@@ -101,9 +115,9 @@ bool AP_ExternalAHRS::enabled() const
 }
 
 // get serial port number for the uart, or -1 if not applicable
-int8_t AP_ExternalAHRS::get_port(void) const
+int8_t AP_ExternalAHRS::get_port(AvailableSensor sensor) const
 {
-    if (!backend) {
+    if (!backend || !has_sensor(sensor)) {
         return -1;
     }
     return backend->get_port();

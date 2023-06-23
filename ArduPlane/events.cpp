@@ -134,6 +134,8 @@ void Plane::failsafe_long_on_event(enum failsafe_state fstype, ModeReason reason
 #endif
         } else if (g.fs_action_long == FS_ACTION_LONG_GLIDE) {
             set_mode(mode_fbwa, reason);
+        } else if (g.fs_action_long == FS_ACTION_LONG_AUTO) {
+            set_mode(mode_auto, reason);
         } else {
             set_mode(mode_rtl, reason);
         }
@@ -172,12 +174,18 @@ void Plane::failsafe_long_on_event(enum failsafe_state fstype, ModeReason reason
 #endif
         } else if (g.fs_action_long == FS_ACTION_LONG_GLIDE) {
             set_mode(mode_fbwa, reason);
+        } else if (g.fs_action_long == FS_ACTION_LONG_AUTO) {
+            set_mode(mode_auto, reason);
         } else if (g.fs_action_long == FS_ACTION_LONG_RTL) {
             set_mode(mode_rtl, reason);
         }
         break;
 
     case Mode::Number::RTL:
+        if (g.fs_action_long == FS_ACTION_LONG_AUTO) {
+            set_mode(mode_auto, reason);
+        }
+        break;
 #if HAL_QUADPLANE_ENABLED
     case Mode::Number::QLAND:
     case Mode::Number::QRTL:
@@ -275,7 +283,7 @@ void Plane::handle_battery_failsafe(const char *type_str, const int8_t action)
         }
 
         case Failsafe_Action_Terminate:
-#if ADVANCED_FAILSAFE == ENABLED
+#if AP_ADVANCEDFAILSAFE_ENABLED
             char battery_type_str[17];
             snprintf(battery_type_str, 17, "%s battery", type_str);
             afs.gcs_terminate(true, battery_type_str);

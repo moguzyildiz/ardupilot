@@ -43,8 +43,12 @@ public:
 
     enum class DevType : uint8_t {
         None   = 0,
+#if AP_EXTERNAL_AHRS_VECTORNAV_ENABLED
         VecNav = 1,
+#endif
+#if AP_EXTERNAL_AHRS_LORD_ENABLED
         LORD = 2,
+#endif
     };
 
     static AP_ExternalAHRS *get_singleton(void) {
@@ -59,8 +63,15 @@ public:
     // Get model/type name
     const char* get_name() const;
 
+    enum class AvailableSensor {
+        GPS = (1U<<0),
+        IMU = (1U<<1),
+        BARO = (1U<<2),
+        COMPASS = (1U<<3),
+    };
+
     // get serial port number, -1 for not enabled
-    int8_t get_port(void) const;
+    int8_t get_port(AvailableSensor sensor) const;
 
     struct state_t {
         HAL_Semaphore sem;
@@ -147,8 +158,14 @@ private:
     AP_Enum<DevType> devtype;
     AP_Int16         rate;
     AP_Int16         options;
+    AP_Int16         sensors;
 
     static AP_ExternalAHRS *_singleton;
+
+    // check if a sensor type is enabled
+    bool has_sensor(AvailableSensor sensor) const {
+        return (uint16_t(sensors.get()) & uint16_t(sensor)) != 0;
+    }
 };
 
 namespace AP {
